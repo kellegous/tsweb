@@ -65,7 +65,7 @@ func main() {
 	go func() {
 		ech <- http.Serve(s.Listener, http.HandlerFunc(
 			func(w http.ResponseWriter, r *http.Request) {
-				who, err := s.LocalClient.WhoIs(ctx, r.RemoteAddr)
+				who, err := s.LocalClient.WhoIs(r.Context(), r.RemoteAddr)
 				if err != nil {
 					log.Panic(err)
 				}
