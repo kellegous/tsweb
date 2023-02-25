@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/kellegous/tsweb"
+	"tailscale.com/tsnet"
 )
 
 type Flags struct {
@@ -45,13 +46,11 @@ func main() {
 
 	ctx := context.Background()
 
-	s, err := tsweb.Start(
-		ctx,
-		&tsweb.ServiceOptions{
-			AuthKey:  flags.AuthKey,
-			Hostname: flags.Hostname,
-			StateDir: flags.StateDir,
-		})
+	s, err := tsweb.Start(&tsnet.Server{
+		AuthKey:  flags.AuthKey,
+		Hostname: flags.Hostname,
+		Dir:      flags.StateDir,
+	})
 	if err != nil {
 		log.Panic(err)
 	}
@@ -62,10 +61,21 @@ func main() {
 		ech <- s.RedirectHTTP(ctx)
 	}()
 
+	l, err := s.ListenTLS("tcp", ":https")
+	if err != nil {
+		log.Panic(err)
+	}
+
+	c, err := s.LocalClient()
+	if err != nil {
+		log.Panic(err)
+	}
+
 	go func() {
-		ech <- http.Serve(s.Listener, http.HandlerFunc(
+		ech <- http.Serve(l, http.HandlerFunc(
 			func(w http.ResponseWriter, r *http.Request) {
-				who, err := s.LocalClient.WhoIs(r.Context(), r.RemoteAddr)
+
+				who, err := c.WhoIs(r.Context(), r.RemoteAddr)
 				if err != nil {
 					log.Panic(err)
 				}

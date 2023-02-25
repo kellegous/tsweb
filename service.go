@@ -5,35 +5,108 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
-	"go.uber.org/multierr"
 	"tailscale.com/client/tailscale"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 )
 
 type Service struct {
-	Server      *tsnet.Server
-	Listener    net.Listener
-	StateDir    string
-	LocalClient *tailscale.LocalClient
+	*tsnet.Server
 }
 
-func (s *Service) Close() error {
-	var res error
-	if err := s.Listener.Close(); err != nil {
-		res = multierr.Append(res, err)
+func Start(s *tsnet.Server) (*Service, error) {
+	// ensure state dir exists
+	if d := s.Dir; d != "" {
+		if _, err := os.Stat(d); err != nil {
+			if err := os.MkdirAll(d, 0700); err != nil {
+				return nil, err
+			}
+		}
 	}
-	if err := s.Server.Close(); err != nil {
-		res = multierr.Append(res, err)
+
+	if err := s.Start(); err != nil {
+		return nil, err
 	}
-	return res
+
+	return &Service{
+		Server: s,
+	}, nil
+}
+
+func (s *Service) WaitUntilReady(ctx context.Context) error {
+	c, err := s.LocalClient()
+	if err != nil {
+		return err
+	}
+
+	if _, err := waitUntilReady(ctx, c); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func waitUntilReady(
+	ctx context.Context,
+	c *tailscale.LocalClient,
+) (*ipnstate.Status, error) {
+	for {
+		status, err := c.Status(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		if status.BackendState == "Running" {
+			return status, nil
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (s *Service) ListenTLS(network string, addr string) (net.Listener, error) {
+	c, err := s.LocalClient()
+	if err != nil {
+		return nil, err
+	}
+
+	l, err := s.Listen(network, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return tls.NewListener(l, &tls.Config{
+		GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return c.GetCertificate(hi)
+		},
+	}), nil
+}
+
+func (s *Service) GetDNSName(ctx context.Context) (string, error) {
+	c, err := s.LocalClient()
+	if err != nil {
+		return "", err
+	}
+
+	status, err := waitUntilReady(ctx, c)
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimRight(status.Self.DNSName, "."), nil
 }
 
 func (s *Service) RedirectHTTP(ctx context.Context) error {
-	status, err := s.LocalClient.Status(ctx)
+	c, err := s.LocalClient()
+	if err != nil {
+		return err
+	}
+
+	status, err := waitUntilReady(ctx, c)
 	if err != nil {
 		return err
 	}
@@ -59,59 +132,4 @@ func (s *Service) RedirectHTTP(ctx context.Context) error {
 				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 			}
 		}))
-}
-
-func Start(
-	ctx context.Context,
-	opts *ServiceOptions,
-) (*Service, error) {
-	s := &tsnet.Server{
-		Dir:      opts.StateDir,
-		Hostname: opts.Hostname,
-		AuthKey:  opts.AuthKey,
-		Logf:     opts.Logger,
-	}
-
-	lc, err := s.LocalClient()
-	if err != nil {
-		return nil, err
-	}
-
-	if _, err := waitUntilRunning(ctx, lc); err != nil {
-		return nil, err
-	}
-
-	l, err := s.Listen("tcp", ":443")
-	if err != nil {
-		return nil, err
-	}
-
-	return &Service{
-		Server: s,
-		Listener: tls.NewListener(l, &tls.Config{
-			GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-				return lc.GetCertificate(hi)
-			},
-		}),
-		StateDir:    opts.StateDir,
-		LocalClient: lc,
-	}, nil
-}
-
-func waitUntilRunning(
-	ctx context.Context,
-	c *tailscale.LocalClient,
-) (*ipnstate.Status, error) {
-	for {
-		status, err := c.Status(ctx)
-		if err != nil {
-			return nil, err
-		}
-
-		if status.BackendState == "Running" {
-			return status, nil
-		}
-
-		time.Sleep(100 * time.Millisecond)
-	}
 }

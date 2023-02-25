@@ -13,34 +13,36 @@ go get -u github.com/kellegous/tsweb
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 
+	"tailscale.com/tsnet"
+
 	"github.com/kellegous/tsweb"
 )
 
 func main() {
-	os.MkdirAll("data", 0700)
-
-	s, err := tsweb.Start(
-		context.Background(),
-		&tsweb.ServiceOptions{
-			AuthKey:  os.Getenv("TS_AUTHKEY"),
-			Hostname: "sample",
-			StateDir: "data",
-		})
+	s, err := tsweb.Start(&tsnet.Server{
+		AuthKey:  os.Getenv("TS_AUTHKEY"),
+		Hostname: "sample",
+		Dir:      "data",
+	})
 	if err != nil {
 		log.Panic(err)
 	}
 	defer s.Close()
 
+	l, err := s.ListenTLS("tcp", ":https")
+	if err != nil {
+		log.Panic(err)
+	}
+
 	log.Panic(
-		http.Serve(s.Listener, http.HandlerFunc(
+		http.Serve(l, http.HandlerFunc(
 			func(w http.ResponseWriter, r *http.Request) {
-				fmt.Fprintln(w, "Hello Tailnet")
+				fmt.Fprintf(w, "Hello Tailnet")
 			},
 		)),
 	)
