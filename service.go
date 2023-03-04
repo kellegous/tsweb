@@ -111,7 +111,7 @@ func (s *Service) RedirectHTTP(ctx context.Context) error {
 		return err
 	}
 
-	l, err := s.Server.Listen("tcp", ":80")
+	l, err := s.Server.Listen("tcp", ":http")
 	if err != nil {
 		return err
 	}
